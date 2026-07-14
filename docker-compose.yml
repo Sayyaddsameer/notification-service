@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # LocalStack — Local AWS emulator (SNS + SQS)
+  # ---------------------------------------------------------------------------
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=sns,sqs
+      - DEFAULT_REGION=us-east-1
+      - DEBUG=0
+    volumes:
+      - "./scripts/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Publisher Service — FastAPI API that accepts events and publishes to SNS
+  # ---------------------------------------------------------------------------
+  publisher:
+    build:
+      context: ./publisher_service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Consumer Service — Background worker that polls SQS and processes events
+  # ---------------------------------------------------------------------------
+  consumer:
+    build:
+      context: ./consumer_service
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+      publisher:
+        condition: service_healthy
+    restart: unless-stopped
